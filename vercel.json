@@ -14,6 +14,5 @@
   "env": {
     "NODE_ENV": "production",
     "VERCEL": "1"
-  },
-  "outputDirectory": "node_modules"
+  }
 }
