@@ -7,19 +7,24 @@ const scraperService = require('../services/scraperService');
 const router = express.Router();
 
 // Konfigurasi multer untuk upload file
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
-        const uploadDir = path.join(__dirname, '../../uploads');
-        if (!fs.existsSync(uploadDir)) {
-            fs.mkdirSync(uploadDir, { recursive: true });
+// Gunakan memory storage untuk Vercel (serverless), disk storage untuk lokal
+const isVercel = process.env.VERCEL === '1';
+
+const storage = isVercel 
+    ? multer.memoryStorage() // Memory storage untuk Vercel
+    : multer.diskStorage({
+        destination: (req, file, cb) => {
+            const uploadDir = path.join(__dirname, '../../uploads');
+            if (!fs.existsSync(uploadDir)) {
+                fs.mkdirSync(uploadDir, { recursive: true });
+            }
+            cb(null, uploadDir);
+        },
+        filename: (req, file, cb) => {
+            const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+            cb(null, uniqueSuffix + '-' + file.originalname);
         }
-        cb(null, uploadDir);
-    },
-    filename: (req, file, cb) => {
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        cb(null, uniqueSuffix + '-' + file.originalname);
-    }
-});
+    });
 
 const upload = multer({
     storage: storage,
@@ -49,14 +54,20 @@ router.post('/upload', upload.single('file'), async (req, res) => {
         }
 
         console.log(`📄 File received: ${req.file.originalname} (${req.file.size} bytes)`);
+        console.log(`📄 Storage type: ${isVercel ? 'memory' : 'disk'}`);
 
         // Upload ke cdnzero menggunakan scraper
-        const result = await scraperService.uploadFile(req.file.path);
+        // Untuk Vercel, pass buffer; untuk lokal, pass path
+        const result = isVercel 
+            ? await scraperService.uploadFileBuffer(req.file.buffer, req.file.originalname)
+            : await scraperService.uploadFile(req.file.path);
 
-        // Hapus file lokal setelah upload
-        fs.unlink(req.file.path, (err) => {
-            if (err) console.error('Error deleting temp file:', err.message);
-        });
+        // Hapus file lokal setelah upload (hanya untuk lokal)
+        if (!isVercel && req.file.path) {
+            fs.unlink(req.file.path, (err) => {
+                if (err) console.error('Error deleting temp file:', err.message);
+            });
+        }
 
         if (result.success) {
             return res.status(200).json({
@@ -73,8 +84,8 @@ router.post('/upload', upload.single('file'), async (req, res) => {
     } catch (error) {
         console.error('❌ Upload error:', error.message);
 
-        // Clean up file jika ada error
-        if (req.file && fs.existsSync(req.file.path)) {
+        // Clean up file jika ada error (hanya untuk lokal)
+        if (!isVercel && req.file && req.file.path && fs.existsSync(req.file.path)) {
             fs.unlink(req.file.path, (err) => {
                 if (err) console.error('Error deleting temp file:', err.message);
             });
@@ -110,12 +121,18 @@ router.post('/upload-multiple', upload.array('files', 10), async (req, res) => {
         for (const file of req.files) {
             console.log(`📄 Processing: ${file.originalname}`);
 
-            const result = await scraperService.uploadFile(file.path);
+            // Upload ke cdnzero menggunakan scraper
+            // Untuk Vercel, pass buffer; untuk lokal, pass path
+            const result = isVercel 
+                ? await scraperService.uploadFileBuffer(file.buffer, file.originalname)
+                : await scraperService.uploadFile(file.path);
 
-            // Hapus file lokal
-            fs.unlink(file.path, (err) => {
-                if (err) console.error('Error deleting temp file:', err.message);
-            });
+            // Hapus file lokal (hanya untuk lokal)
+            if (!isVercel && file.path) {
+                fs.unlink(file.path, (err) => {
+                    if (err) console.error('Error deleting temp file:', err.message);
+                });
+            }
 
             results.push({
                 originalName: file.originalname,

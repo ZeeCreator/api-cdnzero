@@ -163,6 +163,99 @@ class ScraperService {
         }
     }
 
+    /**
+     * Upload file dari buffer (untuk Vercel serverless)
+     */
+    async uploadFileBuffer(fileBuffer, fileName) {
+        try {
+            console.log('📤 Uploading file from buffer:', fileName);
+
+            // Pastikan session aktif
+            if (!this.sessionCookies) {
+                await this.initializeSession();
+            }
+
+            // Buat form data untuk upload
+            const formData = new FormData();
+            formData.append('file', fileBuffer, {
+                filename: fileName,
+                contentType: this.getMimeType(fileName)
+            });
+
+            // Upload ke endpoint yang benar
+            const uploadUrl = `${this.targetUrl}/api/upload.php`;
+
+            console.log('📤 Uploading to:', uploadUrl);
+            console.log('🍪 Using cookie:', this.sessionCookies);
+
+            const response = await axios.post(uploadUrl, formData, {
+                headers: {
+                    ...formData.getHeaders(),
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'application/json, text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Cookie': this.sessionCookies,
+                    'Referer': this.targetUrl,
+                    'X-Requested-With': 'XMLHttpRequest'
+                },
+                httpsAgent: new https.Agent({
+                    rejectUnauthorized: false,
+                    keepAlive: true
+                }),
+                timeout: parseInt(process.env.AXIOS_TIMEOUT) || 30000,
+                maxRedirects: 5
+            });
+
+            console.log('📄 Upload response status:', response.status);
+            console.log('📄 Response headers:', JSON.stringify(response.headers, null, 2));
+            console.log('📄 Response data length:', response.data?.length || 0);
+
+            // Coba parse sebagai JSON dulu
+            let fileUrl = null;
+            try {
+                const jsonData = typeof response.data === 'string' ? JSON.parse(response.data) : response.data;
+                if (jsonData.success && jsonData.data) {
+                    fileUrl = jsonData.data.direct_url || jsonData.data.url || jsonData.data.fileUrl;
+                    console.log('✅ Found URL in JSON response:', fileUrl);
+                }
+            } catch (e) {
+                console.log('📄 Response is not JSON, parsing as HTML...');
+            }
+
+            // Jika tidak ada URL dari JSON, parse HTML
+            if (!fileUrl && response.data) {
+                const $ = cheerio.load(response.data);
+                fileUrl = this.extractFileUrl($, response.data);
+            }
+
+            // Debug: log response jika URL tidak ditemukan
+            if (!fileUrl) {
+                console.log('📄 Full Response:', typeof response.data === 'string' ? response.data.substring(0, 1000) : response.data);
+            }
+
+            return {
+                success: true,
+                data: {
+                    fileName: fileName,
+                    fileSize: fileBuffer.length,
+                    url: fileUrl,
+                    uploadedAt: new Date().toISOString()
+                }
+            };
+        } catch (error) {
+            console.error('❌ Error uploading file:', error.message);
+            console.error('❌ Error code:', error.code);
+            console.error('❌ Error response:', error.response?.status);
+
+            // Reset session jika error
+            this.sessionCookies = null;
+
+            return {
+                success: false,
+                error: error.message
+            };
+        }
+    }
+
     async uploadFile(filePath) {
         try {
             console.log('📤 Uploading file:', filePath);
